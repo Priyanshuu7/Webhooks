@@ -1,0 +1,11 @@
+{
+  "name": "webhooks",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:automator": "pnpm --filter automator dev",
+    "dev:lms": "pnpm --filter lms dev"
+  },
+  "packageManager": "pnpm@10.26.2"
+}
