@@ -1,0 +1,369 @@
+# Webhooks System Overview
+
+## 🎯 What This System Does
+
+This is a **webhook-based event-driven architecture** that demonstrates how two services communicate asynchronously. When a user purchases a course on the LMS (Learning Management System), the LMS automatically notifies the Automator service, which then sends course invitations to students.
+
+---
+
+## 🏗️ Architecture
+
+The system consists of two main services:
+
+```mermaid
+graph LR
+    A[User] -->|1. Register Webhook| B[LMS Service<br/>Port 3001]
+    A -->|2. Purchase Course| B
+    B -->|3. Send Webhook| C[Automator Service<br/>Port 3000]
+    C -->|4. Process & Send Invite| D[Student Email/Discord]
+    
+    style B fill:#4CAF50
+    style C fill:#2196F3
+```
+
+### **Service 1: LMS (Webhook Provider)**
+- **Port**: 3001
+- **Role**: Manages course purchases and sends webhook notifications
+- **Location**: [apps/lms/src/index.ts](file:///home/priyanshu-rajak/Desktop/webhooks/apps/lms/src/index.ts)
+
+### **Service 2: Automator (Webhook Consumer)**
+- **Port**: 3000
+- **Role**: Receives webhook notifications and automates student onboarding
+- **Location**: [apps/automator/src/index.ts](file:///home/priyanshu-rajak/Desktop/webhooks/apps/automator/src/index.ts)
+
+---
+
+## 🔄 How It Works (Step-by-Step Flow)
+
+### **Step 1: Register a Webhook**
+
+The Automator service first registers itself with the LMS to receive notifications.
+
+**Endpoint**: `POST /api/register-webhook` (LMS)
+
+**Request Body**:
+```json
+{
+  "url": "http://localhost:3000/webhook",
+  "token": "somesecret",
+  "event": "purchase"
+}
+```
+
+**What Happens**:
+- LMS stores this webhook configuration in memory (in the `db` array)
+- The webhook includes:
+  - `url`: Where to send notifications
+  - `token`: Security token for authentication
+  - `event`: Which event type to listen for (purchase/refund/signup)
+
+---
+
+### **Step 2: Purchase Event Triggered**
+
+When a user purchases a course, the LMS processes the purchase.
+
+**Endpoint**: `POST /api/purchase` (LMS)
+
+**Request Body**:
+```json
+{
+  "email": "student@example.com",
+  "name": "John Doe",
+  "course": "Web Development"
+}
+```
+
+**What Happens**:
+1. LMS creates a payload with purchase details
+2. LMS filters registered webhooks for `event === "purchase"`
+3. LMS calls the [sendWebhook()](file:///home/priyanshu-rajak/Desktop/webhooks/apps/lms/src/index.ts#68-85) function
+
+---
+
+### **Step 3: Webhook Delivery**
+
+The LMS sends the purchase data to all registered webhook URLs.
+
+**Implementation** ([apps/lms/src/index.ts:68-84](file:///home/priyanshu-rajak/Desktop/webhooks/apps/lms/src/index.ts#L68-L84)):
+```typescript
+async function sendWebhook(webhooks: Webhook[], payload: Payload) {
+  for (const webhook of webhooks) {
+    try {
+      await fetch(webhook.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${webhook.token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      console.log("Webhook sent successfully");
+    } catch (error) {
+      console.error("Webhook failed to send:", error);
+    }
+  }
+}
+```
+
+**Payload Sent**:
+```json
+{
+  "id": "1735627453000",
+  "email": "student@example.com",
+  "name": "John Doe",
+  "course": "Web Development"
+}
+```
+
+---
+
+### **Step 4: Automator Processes Webhook**
+
+The Automator receives the webhook and processes it.
+
+**Endpoint**: `POST /webhook` (Automator)
+
+**Implementation** ([apps/automator/src/index.ts:28-43](file:///home/priyanshu-rajak/Desktop/webhooks/apps/automator/src/index.ts#L28-L43)):
+```typescript
+app.post("/webhook", (req, res) => {
+  // Security: Verify Bearer token
+  if (req.headers.authorization !== `Bearer ${process.env.secret}`) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const { id, name, email, course }: Payload = req.body;
+
+  // Automated actions (currently just logging)
+  console.log(
+    `Invite sent to ${name} on ${email} for course ${course}`
+  );
+
+  return res.json({ message: "OK" });
+});
+```
+
+**What Happens**:
+1. **Authentication**: Verifies the Bearer token matches `process.env.secret`
+2. **Processing**: Extracts student information from the payload
+3. **Automation**: Logs the invite (placeholder for actual email/Discord invite)
+4. **Response**: Returns success status to LMS
+
+---
+
+## 🔐 Security Features
+
+### **Token-Based Authentication**
+- Each webhook includes a secret token
+- Automator validates the token before processing
+- Prevents unauthorized webhook calls
+
+**Flow**:
+```
+LMS → Sends: Authorization: Bearer somesecret
+Automator → Validates: req.headers.authorization === 'Bearer somesecret'
+```
+
+### **CORS Protection**
+- Automator has CORS configured to allow specific origins
+- Prevents cross-origin attacks
+
+---
+
+## 📁 Project Structure
+
+```
+webhooks/
+├── apps/
+│   ├── lms/                    # Webhook Provider
+│   │   ├── src/
+│   │   │   └── index.ts        # Main LMS logic
+│   │   ├── .env                # LMS_PORT=3001
+│   │   └── package.json
+│   │
+│   └── automator/              # Webhook Consumer
+│       ├── src/
+│       │   └── index.ts        # Main Automator logic
+│       ├── .env                # AUTOMATOR_PORT=3000, secret=somesecret
+│       └── package.json
+│
+├── package.json                # Root monorepo scripts
+├── pnpm-workspace.yaml         # Workspace configuration
+└── tsconfig.json               # Shared TypeScript config
+```
+
+---
+
+## 🚀 Running the System
+
+### **Install Dependencies**
+```bash
+pnpm install
+```
+
+### **Run Both Services**
+```bash
+# Run all services in parallel
+pnpm dev
+
+# Or run individually
+pnpm dev:lms        # Start LMS only
+pnpm dev:automator  # Start Automator only
+```
+
+### **Service URLs**
+- **LMS**: http://localhost:3001
+- **Automator**: http://localhost:3000
+
+---
+
+## 🧪 Testing the System
+
+### **1. Start Both Services**
+```bash
+pnpm dev
+```
+
+### **2. Register the Webhook**
+```bash
+curl -X POST http://localhost:3001/api/register-webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "http://localhost:3000/webhook",
+    "token": "somesecret",
+    "event": "purchase"
+  }'
+```
+
+**Expected Response**:
+```json
+{ "message": "Webhook Registered" }
+```
+
+### **3. Trigger a Purchase**
+```bash
+curl -X POST http://localhost:3001/api/purchase \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "student@example.com",
+    "name": "John Doe",
+    "course": "Web Development"
+  }'
+```
+
+**Expected Response**:
+```json
+{ "message": "Purchase event processed and webhooks sent" }
+```
+
+### **4. Check Automator Logs**
+You should see in the Automator console:
+```
+Invite sent to John Doe on student@example.com for course Web Development
+```
+
+---
+
+## 🔑 Key Technologies
+
+| Technology | Purpose |
+|------------|---------|
+| **TypeScript** | Type-safe JavaScript for both services |
+| **Express.js** | Web framework for REST APIs |
+| **pnpm Workspaces** | Monorepo management |
+| **nodemon** | Auto-restart on file changes |
+| **dotenv** | Environment variable management |
+| **CORS** | Cross-origin request handling |
+
+---
+
+## 💡 Key Concepts Demonstrated
+
+### **1. Webhook Pattern**
+- **Publisher-Subscriber**: LMS publishes events, Automator subscribes
+- **Decoupling**: Services don't need to know about each other's internals
+- **Asynchronous**: LMS doesn't wait for Automator to complete processing
+
+### **2. Event-Driven Architecture**
+- Events trigger actions across services
+- Supports multiple event types: `purchase`, `refund`, `signup`
+- Scalable: Can add more consumers without changing LMS
+
+### **3. Monorepo Structure**
+- Shared TypeScript configuration
+- Independent service deployments
+- Centralized dependency management
+
+### **4. In-Memory Storage**
+- Webhooks stored in `db: Webhook[]` array
+- Simple for demonstration (would use a database in production)
+
+---
+
+## 🔄 Data Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant LMS
+    participant Automator
+    participant Student
+
+    User->>LMS: POST /api/register-webhook
+    LMS->>LMS: Store webhook in db[]
+    LMS-->>User: Webhook Registered
+
+    User->>LMS: POST /api/purchase
+    LMS->>LMS: Create payload
+    LMS->>LMS: Filter webhooks (event=purchase)
+    LMS->>Automator: POST /webhook (with Bearer token)
+    Automator->>Automator: Validate token
+    Automator->>Automator: Process payload
+    Automator->>Student: Send invite (email/Discord)
+    Automator-->>LMS: 200 OK
+    LMS-->>User: Purchase processed
+```
+
+---
+
+## 🎯 Real-World Use Cases
+
+This pattern is used by many platforms:
+
+1. **Stripe**: Sends webhooks for payment events
+2. **GitHub**: Sends webhooks for repository events (push, PR, issues)
+3. **Shopify**: Sends webhooks for order events
+4. **Twilio**: Sends webhooks for SMS/call events
+
+---
+
+## 🚧 Current Limitations & Production Considerations
+
+### **Current State (Demo)**
+- ✅ In-memory storage (webhooks lost on restart)
+- ✅ No retry mechanism for failed webhooks
+- ✅ No webhook delivery logs
+- ✅ Simple token authentication
+
+### **Production Improvements**
+- 🔄 Use a database (PostgreSQL/MongoDB) for webhook storage
+- 🔄 Implement retry logic with exponential backoff
+- 🔄 Add webhook delivery status tracking
+- 🔄 Use HMAC signatures instead of Bearer tokens
+- 🔄 Add rate limiting
+- 🔄 Implement webhook event queuing (Redis/RabbitMQ)
+- 🔄 Add monitoring and alerting
+
+---
+
+## 📝 Summary
+
+This system demonstrates a **production-grade webhook architecture** in a simplified form:
+
+1. **LMS** acts as the event source (webhook provider)
+2. **Automator** acts as the event consumer (webhook receiver)
+3. **Security** is enforced via Bearer token authentication
+4. **Scalability** is achieved through event-driven design
+5. **Monorepo** structure keeps related services organized
+
+The architecture is **extensible** - you can easily add more event types, more consumers, or more providers without major refactoring.
